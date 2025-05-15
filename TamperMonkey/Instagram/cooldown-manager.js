@@ -1,6 +1,7 @@
 // ==UserScript==
 // @name         Instagram Rate Manager
-// @version      2.0
+// @version      1.0
+// @description  Centralized rate limiter for Instagram actions with cross-tab coordination
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_addValueChangeListener
@@ -11,8 +12,12 @@
     const QUEUE_KEY = 'ig_rate_queue';
     const STATE_KEY = 'ig_rate_state';
 
+    // Polyfill for Firefox compatibility
+    if (typeof GM_removeValueChangeListener === 'undefined' && typeof GM_unregisterValueChangeListener !== 'undefined') {
+        window.GM_removeValueChangeListener = GM_unregisterValueChangeListener;
+    }
+
     window.InstagramRateManager = {
-        // Generate unique tab ID
         getTabId: () => {
             let id = sessionStorage.getItem('tm_tab_id');
             if (!id) {
@@ -22,9 +27,8 @@
             return id;
         },
 
-        // Join the global queue
-        joinQueue: async () => {
-            const tabId = InstagramRateManager.getTabId();
+        joinQueue: async function() {
+            const tabId = this.getTabId();
             let queue = GM_getValue(QUEUE_KEY, []);
             
             if (!queue.includes(tabId)) {
@@ -35,31 +39,30 @@
             return new Promise((resolve) => {
                 const listener = GM_addValueChangeListener(QUEUE_KEY, (key, oldVal, newVal) => {
                     if (newVal[0] === tabId) {
-                        GM_removeValueChangeListener(listener);
+                        if (GM_removeValueChangeListener) {
+                            GM_removeValueChangeListener(listener);
+                        }
                         resolve();
                     }
                 });
             });
         },
 
-        // Leave the queue
-        leaveQueue: () => {
-            const tabId = InstagramRateManager.getTabId();
+        leaveQueue: function() {
+            const tabId = this.getTabId();
             let queue = GM_getValue(QUEUE_KEY, []);
             queue = queue.filter(id => id !== tabId);
             GM_setValue(QUEUE_KEY, queue);
         },
 
-        // Check rate limits (updated)
-        checkLimit: () => {
+        checkLimit: function() {
             const now = Date.now();
-            const state = GM_getValue(STATE_KEY, { requests: [], queue: [] });
+            const state = GM_getValue(STATE_KEY, { requests: [] });
             
-            // Cleanup old requests
-            state.requests = state.requests.filter(ts => now - ts < 3600000);
+            const recent = state.requests.filter(ts => now - ts < 3600000);
             
-            if (state.requests.length >= MAX_HOURLY) {
-                const oldest = state.requests[0];
+            if (recent.length >= MAX_HOURLY) {
+                const oldest = recent[0];
                 const cooldown = 3600000 - (now - oldest);
                 return { allowed: false, wait: cooldown };
             }
@@ -67,11 +70,20 @@
             return { allowed: true };
         },
 
-        // Record request
-        recordRequest: () => {
-            const state = GM_getValue(STATE_KEY, { requests: [], queue: [] });
+        recordRequest: function() {
+            const state = GM_getValue(STATE_KEY, { requests: [] });
             state.requests.push(Date.now());
             GM_setValue(STATE_KEY, state);
+        },
+
+        getQueueStatus: function() {
+            const state = GM_getValue(STATE_KEY, { requests: [] });
+            const recent = state.requests.filter(ts => Date.now() - ts < 3600000);
+            return {
+                used: recent.length,
+                remaining: MAX_HOURLY - recent.length,
+                reset: recent[0] ? 3600000 - (Date.now() - recent[0]) : 0
+            };
         }
     };
 })();
