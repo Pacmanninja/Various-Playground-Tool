@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         Instagram Rate Manager
+// @author       Pacmanninja
 // @version      1.0
-// @description  Centralized rate limiter for Instagram actions with cross-tab coordination
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_addValueChangeListener
+// @grant        GM_removeValueChangeListener
 // ==/UserScript==
 
 (() => {
@@ -12,7 +13,7 @@
     const QUEUE_KEY = 'ig_rate_queue';
     const STATE_KEY = 'ig_rate_state';
 
-    // Polyfill for Firefox compatibility
+    // Firefox compatibility polyfill
     if (typeof GM_removeValueChangeListener === 'undefined' && typeof GM_unregisterValueChangeListener !== 'undefined') {
         window.GM_removeValueChangeListener = GM_unregisterValueChangeListener;
     }
@@ -27,47 +28,41 @@
             return id;
         },
 
-        joinQueue: async function() {
+        joinQueue: function() {
             const tabId = this.getTabId();
-            let queue = GM_getValue(QUEUE_KEY, []);
-            
-            if (!queue.includes(tabId)) {
-                queue.push(tabId);
-                await GM_setValue(QUEUE_KEY, queue);
-            }
-
             return new Promise((resolve) => {
-                const listener = GM_addValueChangeListener(QUEUE_KEY, (key, oldVal, newVal) => {
-                    if (newVal[0] === tabId) {
-                        if (GM_removeValueChangeListener) {
-                            GM_removeValueChangeListener(listener);
-                        }
+                const updateQueue = () => {
+                    let queue = GM_getValue(QUEUE_KEY, []);
+                    if (!queue.includes(tabId)) {
+                        queue.push(tabId);
+                        GM_setValue(QUEUE_KEY, queue);
+                    }
+                    
+                    if (queue[0] === tabId) {
+                        GM_removeValueChangeListener(listener);
                         resolve();
                     }
-                });
+                };
+
+                const listener = GM_addValueChangeListener(QUEUE_KEY, updateQueue);
+                updateQueue(); // Initial check
             });
         },
 
         leaveQueue: function() {
             const tabId = this.getTabId();
-            let queue = GM_getValue(QUEUE_KEY, []);
-            queue = queue.filter(id => id !== tabId);
-            GM_setValue(QUEUE_KEY, queue);
+            GM_setValue(QUEUE_KEY, GM_getValue(QUEUE_KEY, []).filter(id => id !== tabId));
         },
 
         checkLimit: function() {
-            const now = Date.now();
             const state = GM_getValue(STATE_KEY, { requests: [] });
-            
+            const now = Date.now();
             const recent = state.requests.filter(ts => now - ts < 3600000);
             
-            if (recent.length >= MAX_HOURLY) {
-                const oldest = recent[0];
-                const cooldown = 3600000 - (now - oldest);
-                return { allowed: false, wait: cooldown };
-            }
-            
-            return { allowed: true };
+            return recent.length >= MAX_HOURLY ? {
+                allowed: false,
+                wait: 3600000 - (now - recent[0])
+            } : { allowed: true };
         },
 
         recordRequest: function() {
